@@ -3,45 +3,95 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
 	"strings"
 )
 
-// downloadTidal downloads media from Tidal using tidal-dl
-func downloadTidal(url, username, password string) error {
-	cmd := exec.Command("tidal-dl", "-u", username, "-p", password, url)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+// ServiceType represents the type of media service
+type ServiceType int
+
+const (
+	ServiceUnknown ServiceType = iota
+	ServiceTidal
+	ServiceSoundCloud
+	ServiceYouTube
+)
+
+// String returns the string representation of the service type
+func (s ServiceType) String() string {
+	switch s {
+	case ServiceTidal:
+		return "Tidal"
+	case ServiceSoundCloud:
+		return "SoundCloud"
+	case ServiceYouTube:
+		return "YouTube"
+	default:
+		return "Unknown"
+	}
+}
+
+// CommandExecutor is an interface for executing commands (useful for testing)
+type CommandExecutor interface {
+	Execute(name string, args ...string) error
+}
+
+// RealCommandExecutor executes real system commands
+type RealCommandExecutor struct {
+	Stdout io.Writer
+	Stderr io.Writer
+}
+
+// Execute runs a real system command
+func (r *RealCommandExecutor) Execute(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Stdout = r.Stdout
+	cmd.Stderr = r.Stderr
 	return cmd.Run()
 }
 
-// downloadSoundcloud downloads media from SoundCloud using scdl
-func downloadSoundcloud(url string) error {
-	cmd := exec.Command("sh", "-c", fmt.Sprintf("scdl -l %s", url))
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-// downloadYoutube downloads media from YouTube using ytmdl
-func downloadYoutube(url string) error {
-	cmd := exec.Command("ytmdl", url)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-func main() {
-	reader := bufio.NewReader(os.Stdin)
-
-	// Regular expressions for URL matching
+// DetectService determines which service a URL belongs to
+func DetectService(url string) ServiceType {
 	soundcloudRegex := regexp.MustCompile(`^https?://(www\.)?soundcloud\.com/`)
 	tidalRegex1 := regexp.MustCompile(`^https?://listen\.tidal\.com/`)
 	tidalRegex2 := regexp.MustCompile(`^https?://tidal\.com/`)
 	youtubeRegex1 := regexp.MustCompile(`^https?://(www\.)?youtube\.com/`)
 	youtubeRegex2 := regexp.MustCompile(`^https?://(www\.)?youtu\.be/`)
+
+	if soundcloudRegex.MatchString(url) {
+		return ServiceSoundCloud
+	} else if tidalRegex1.MatchString(url) || tidalRegex2.MatchString(url) {
+		return ServiceTidal
+	} else if youtubeRegex1.MatchString(url) || youtubeRegex2.MatchString(url) {
+		return ServiceYouTube
+	}
+	return ServiceUnknown
+}
+
+// downloadTidal downloads media from Tidal using tidal-dl
+func downloadTidal(url, username, password string, executor CommandExecutor) error {
+	return executor.Execute("tidal-dl", "-u", username, "-p", password, url)
+}
+
+// downloadSoundcloud downloads media from SoundCloud using scdl
+func downloadSoundcloud(url string, executor CommandExecutor) error {
+	return executor.Execute("sh", "-c", fmt.Sprintf("scdl -l %s", url))
+}
+
+// downloadYoutube downloads media from YouTube using ytmdl
+func downloadYoutube(url string, executor CommandExecutor) error {
+	return executor.Execute("ytmdl", url)
+}
+
+func main() {
+	reader := bufio.NewReader(os.Stdin)
+	executor := &RealCommandExecutor{
+		Stdout: os.Stdout,
+		Stderr: os.Stderr,
+	}
 
 	for {
 		fmt.Println("Download media from Tidal, Soundcloud, or YouTube.")
@@ -55,14 +105,18 @@ func main() {
 		}
 		url = strings.TrimSpace(url)
 
+		// Detect which service the URL belongs to
+		service := DetectService(url)
+
 		// Match URL pattern and call appropriate downloader
-		if soundcloudRegex.MatchString(url) {
+		switch service {
+		case ServiceSoundCloud:
 			fmt.Println("SoundCloud")
-			if err := downloadSoundcloud(url); err != nil {
+			if err := downloadSoundcloud(url, executor); err != nil {
 				fmt.Fprintf(os.Stderr, "Error downloading from SoundCloud: %v\n", err)
 				os.Exit(1)
 			}
-		} else if tidalRegex1.MatchString(url) || tidalRegex2.MatchString(url) {
+		case ServiceTidal:
 			fmt.Println("Tidal")
 
 			// Get Tidal credentials
@@ -82,17 +136,17 @@ func main() {
 			}
 			password = strings.TrimSpace(password)
 
-			if err := downloadTidal(url, username, password); err != nil {
+			if err := downloadTidal(url, username, password, executor); err != nil {
 				fmt.Fprintf(os.Stderr, "Error downloading from Tidal: %v\n", err)
 				os.Exit(1)
 			}
-		} else if youtubeRegex1.MatchString(url) || youtubeRegex2.MatchString(url) {
+		case ServiceYouTube:
 			fmt.Println("YouTube")
-			if err := downloadYoutube(url); err != nil {
+			if err := downloadYoutube(url, executor); err != nil {
 				fmt.Fprintf(os.Stderr, "Error downloading from YouTube: %v\n", err)
 				os.Exit(1)
 			}
-		} else {
+		default:
 			fmt.Fprintf(os.Stderr, "Error: URL %s is not supported.\n", url)
 			os.Exit(1)
 		}

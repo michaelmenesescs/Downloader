@@ -11,6 +11,7 @@ downloader
 
 # Output coverage
 *.out
+coverage.out
 
 # Go workspace file
 go.work

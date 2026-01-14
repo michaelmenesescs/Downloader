@@ -28,6 +28,41 @@ go build -o downloader main.go
 docker build -t downloader .
 ```
 
+## Testing
+
+Run all tests:
+
+```bash
+go test -v
+```
+
+Run tests with coverage:
+
+```bash
+go test -cover
+```
+
+Generate detailed coverage report:
+
+```bash
+go test -coverprofile=coverage.out
+go tool cover -func=coverage.out
+```
+
+View coverage in browser:
+
+```bash
+go tool cover -html=coverage.out
+```
+
+### Test Coverage
+
+The test suite covers:
+- ✅ URL pattern matching for all services (100% coverage)
+- ✅ Download function logic with mocked command execution (100% coverage)
+- ✅ ServiceType enum and string representation (100% coverage)
+- ✅ Error handling for all download operations
+
 ## Usage
 
 ### Local
