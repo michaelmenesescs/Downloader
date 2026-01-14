@@ -1,0 +1,55 @@
+# Use the official Go image as the base image for building
+FROM golang:1.21 AS builder
+
+# Set the working directory
+WORKDIR /app
+
+# Copy Go module files
+COPY go.mod go.sum ./
+
+# Download Go dependencies
+RUN go mod download
+
+# Copy the source code
+COPY *.go ./
+
+# Build the Go application
+RUN CGO_ENABLED=0 GOOS=linux go build -o downloader .
+
+# Use a Python base image for runtime (needed for the external tools)
+FROM python:3-slim
+
+# Set the working directory to /app
+WORKDIR /app
+
+# Install the required dependencies
+RUN apt-get update -y && \
+    apt-get install -y git ffmpeg curl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Clone the Tidal Media Downloader repository
+RUN git clone https://github.com/yaronzz/Tidal-Media-Downloader.git
+
+# Install Tidal Media Downloader
+RUN pip install -r Tidal-Media-Downloader/TIDALDL-PY/requirements.txt && \
+    python Tidal-Media-Downloader/TIDALDL-PY/setup.py install
+
+# Install SCDL
+RUN pip3 install scdl
+
+# Install ytmdl
+RUN pip install ytmdl --upgrade
+
+# Copy the Go binary from the builder stage
+COPY --from=builder /app/downloader /app/downloader
+RUN chmod +x /app/downloader
+
+# Create downloads directory
+RUN mkdir -p /app/downloads
+
+# Expose API port
+EXPOSE 8080
+
+# Set the entrypoint to run in server mode
+ENTRYPOINT ["/app/downloader", "-mode=server"]

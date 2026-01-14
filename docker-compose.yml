@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: downloader-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    networks:
+      - downloader-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  downloader-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: downloader-api
+    ports:
+      - "8080:8080"
+    environment:
+      - ES_URL=http://elasticsearch:9200
+      - API_ADDR=:8080
+      - DOWNLOAD_PATH=/app/downloads
+      - WORKERS=3
+    volumes:
+      - ./downloads:/app/downloads
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - downloader-network
+    restart: unless-stopped
+
+volumes:
+  es_data:
+    driver: local
+
+networks:
+  downloader-network:
+    driver: bridge

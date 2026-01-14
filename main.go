@@ -2,12 +2,16 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"regexp"
 	"strings"
+	"syscall"
 )
 
 // ServiceType represents the type of media service
@@ -87,6 +91,66 @@ func downloadYoutube(url string, executor CommandExecutor) error {
 }
 
 func main() {
+	// Command-line flags
+	mode := flag.String("mode", "interactive", "Run mode: 'interactive' or 'server'")
+	esURL := flag.String("es-url", "http://localhost:9200", "Elasticsearch URL")
+	apiAddr := flag.String("api-addr", ":8080", "API server address")
+	downloadPath := flag.String("download-path", "./downloads", "Download directory path")
+	workers := flag.Int("workers", 3, "Number of download workers")
+	flag.Parse()
+
+	if *mode == "server" {
+		runServer(*esURL, *apiAddr, *downloadPath, *workers)
+	} else {
+		runInteractive()
+	}
+}
+
+func runServer(esURL, apiAddr, downloadPath string, workers int) {
+	log.Println("Starting Downloader in server mode...")
+
+	// Initialize storage
+	storage, err := NewStorage([]string{esURL})
+	if err != nil {
+		log.Fatalf("Failed to initialize storage: %v", err)
+	}
+
+	// Ping Elasticsearch
+	if err := storage.Ping(); err != nil {
+		log.Fatalf("Failed to connect to Elasticsearch: %v", err)
+	}
+
+	// Initialize executor
+	executor := &RealCommandExecutor{
+		Stdout: os.Stdout,
+		Stderr: os.Stderr,
+	}
+
+	// Initialize download manager
+	downloadManager := NewDownloadManager(storage, executor, downloadPath, workers)
+	downloadManager.Start()
+
+	// Initialize API
+	api := NewAPI(storage, downloadManager)
+
+	// Handle graceful shutdown
+	go func() {
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+		<-sigChan
+		log.Println("Shutting down...")
+		downloadManager.Stop()
+		os.Exit(0)
+	}()
+
+	// Start API server
+	log.Printf("API server running on %s", apiAddr)
+	if err := api.Start(apiAddr); err != nil {
+		log.Fatalf("Failed to start API server: %v", err)
+	}
+}
+
+func runInteractive() {
 	reader := bufio.NewReader(os.Stdin)
 	executor := &RealCommandExecutor{
 		Stdout: os.Stdout,
