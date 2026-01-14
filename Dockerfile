@@ -1,35 +1,52 @@
-# Use the official Python image as the base image
-FROM python:3
+# Use the official Go image as the base image for building
+FROM golang:1.21 AS builder
+
+# Set the working directory
+WORKDIR /app
+
+# Copy Go module files
+COPY go.mod ./
+
+# Download Go dependencies
+RUN go mod download
+
+# Copy the source code
+COPY main.go ./
+
+# Build the Go application
+RUN CGO_ENABLED=0 GOOS=linux go build -o downloader .
+
+# Use a Python base image for runtime (needed for the external tools)
+FROM python:3-slim
 
 # Set the working directory to /app
 WORKDIR /app
 
 # Install the required dependencies
-RUN apt-get update -y 
-
-RUN apt-get install -y git
-
-RUN apt-get install -y ffmpeg
+RUN apt-get update -y && \
+    apt-get install -y git ffmpeg && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 # Clone the Tidal Media Downloader repository
 RUN git clone https://github.com/yaronzz/Tidal-Media-Downloader.git
 
 # Install Tidal Media Downloader
-RUN pip install -r Tidal-Media-Downloader/TIDALDL-PY/requirements.txt
-RUN python Tidal-Media-Downloader/TIDALDL-PY/setup.py install
+RUN pip install -r Tidal-Media-Downloader/TIDALDL-PY/requirements.txt && \
+    python Tidal-Media-Downloader/TIDALDL-PY/setup.py install
 
 # Install SCDL
 RUN pip3 install scdl
 
-# Clone the YTtomp3 repository
+# Install ytmdl
 RUN pip install ytmdl --upgrade
 
-# Add the script that checks the URL and runs the appropriate downloader
-COPY download.py /app/download.py
-RUN chmod +x /app/download.py
+# Copy the Go binary from the builder stage
+COPY --from=builder /app/downloader /app/downloader
+RUN chmod +x /app/downloader
 
 # Define the volume
 VOLUME /app/downloads
 
-# Set the entrypoint to the script that checks the URL and runs the appropriate downloader
-ENTRYPOINT ["/app/download.py"]
+# Set the entrypoint to the Go binary
+ENTRYPOINT ["/app/downloader"]

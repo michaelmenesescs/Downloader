@@ -1,0 +1,100 @@
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"os/exec"
+	"regexp"
+	"strings"
+)
+
+// downloadTidal downloads media from Tidal using tidal-dl
+func downloadTidal(url, username, password string) error {
+	cmd := exec.Command("tidal-dl", "-u", username, "-p", password, url)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// downloadSoundcloud downloads media from SoundCloud using scdl
+func downloadSoundcloud(url string) error {
+	cmd := exec.Command("sh", "-c", fmt.Sprintf("scdl -l %s", url))
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// downloadYoutube downloads media from YouTube using ytmdl
+func downloadYoutube(url string) error {
+	cmd := exec.Command("ytmdl", url)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func main() {
+	reader := bufio.NewReader(os.Stdin)
+
+	// Regular expressions for URL matching
+	soundcloudRegex := regexp.MustCompile(`^https?://(www\.)?soundcloud\.com/`)
+	tidalRegex1 := regexp.MustCompile(`^https?://listen\.tidal\.com/`)
+	tidalRegex2 := regexp.MustCompile(`^https?://tidal\.com/`)
+	youtubeRegex1 := regexp.MustCompile(`^https?://(www\.)?youtube\.com/`)
+	youtubeRegex2 := regexp.MustCompile(`^https?://(www\.)?youtu\.be/`)
+
+	for {
+		fmt.Println("Download media from Tidal, Soundcloud, or YouTube.")
+
+		// Get URL from user
+		fmt.Print("URL: ")
+		url, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
+			os.Exit(1)
+		}
+		url = strings.TrimSpace(url)
+
+		// Match URL pattern and call appropriate downloader
+		if soundcloudRegex.MatchString(url) {
+			fmt.Println("SoundCloud")
+			if err := downloadSoundcloud(url); err != nil {
+				fmt.Fprintf(os.Stderr, "Error downloading from SoundCloud: %v\n", err)
+				os.Exit(1)
+			}
+		} else if tidalRegex1.MatchString(url) || tidalRegex2.MatchString(url) {
+			fmt.Println("Tidal")
+
+			// Get Tidal credentials
+			fmt.Print("Tidal username: ")
+			username, err := reader.ReadString('\n')
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error reading username: %v\n", err)
+				os.Exit(1)
+			}
+			username = strings.TrimSpace(username)
+
+			fmt.Print("Tidal password: ")
+			password, err := reader.ReadString('\n')
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error reading password: %v\n", err)
+				os.Exit(1)
+			}
+			password = strings.TrimSpace(password)
+
+			if err := downloadTidal(url, username, password); err != nil {
+				fmt.Fprintf(os.Stderr, "Error downloading from Tidal: %v\n", err)
+				os.Exit(1)
+			}
+		} else if youtubeRegex1.MatchString(url) || youtubeRegex2.MatchString(url) {
+			fmt.Println("YouTube")
+			if err := downloadYoutube(url); err != nil {
+				fmt.Fprintf(os.Stderr, "Error downloading from YouTube: %v\n", err)
+				os.Exit(1)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "Error: URL %s is not supported.\n", url)
+			os.Exit(1)
+		}
+	}
+}
