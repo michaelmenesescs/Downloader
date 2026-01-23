@@ -38,13 +38,48 @@ The YouTube downloader is specifically optimized for DJ sets and mixes with the 
 ### DJ Tracklist Finder
 Automatically discover and extract tracklists from DJ mixes:
 - **YouTube search**: Searches for mixes by DJ name
-- **Smart parsing**: Extracts timestamps and track information from descriptions
+- **Conservative parsing**: Only extracts data that clearly exists in descriptions (no hallucinations)
 - **Multiple formats**: Supports various tracklist formats:
   - `00:00 - Artist - Track`
   - `[00:00] Artist - Track`
-  - `1. Artist - Track`
+  - `1. 00:00 - Artist - Track`
+  - `00:00 Track Name` (when artist unclear)
 - **Batch results**: Displays tracklists from multiple videos at once
 - **Direct links**: Provides YouTube URLs for each mix found
+- **Automatic export**: Saves results in JSON, CSV, and Markdown formats
+- **Verification**: All exports include raw lines from descriptions for accuracy verification
+
+## Export Formats
+
+When tracklists are found, they are automatically exported to `./tracklists/` in three formats:
+
+### JSON Export
+- **File**: `{DJ_Name}_{timestamp}.json`
+- **Contents**: Complete structured data with all metadata
+- **Use case**: Machine-readable format for further processing
+- **Verification**: Includes `raw_line` field for every track
+
+### CSV Export
+- **File**: `{DJ_Name}_{timestamp}.csv`
+- **Columns**: Video Title, Video URL, Timestamp, Artist, Track, Raw Line (Verification)
+- **Use case**: Import into spreadsheets, track management tools, databases
+
+### Markdown Export
+- **File**: `{DJ_Name}_{timestamp}.md`
+- **Contents**: Human-readable format with collapsible verification sections
+- **Use case**: Documentation, sharing, archiving
+
+## Anti-Hallucination Guarantees
+
+This tool is designed to extract **only** what exists in video descriptions:
+
+1. **No invented data**: If artist/track split is unclear, full info is stored in track field with empty artist
+2. **Raw line preservation**: Every extracted track includes the original line for verification
+3. **Conservative patterns**: Only extracts lines with clear timestamps to avoid false positives
+4. **Minimum length checks**: Skips very short lines that are likely noise
+5. **Deduplication**: Prevents duplicate entries from being added
+
+**You can always verify**: Check the "Raw Line" column in CSV exports or the verification sections in Markdown to confirm accuracy.
 
 ## Building
 
@@ -117,6 +152,20 @@ Uploader: Boiler Room
   00:00 - Amelie Lens - In My Mind
   08:30 - VTSS - Berlin
   ...
+
+─────────────────────────────────────────────────────────────
+
+✨ Search complete! Found tracklists in 8/10 videos.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Exporting tracklists...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ JSON exported to: ./tracklists/Amelie_Lens_20260123_143022.json
+✅ CSV exported to: ./tracklists/Amelie_Lens_20260123_143022.csv
+✅ Markdown exported to: ./tracklists/Amelie_Lens_20260123_143022.md
+
+💾 All exports saved to: ./tracklists
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
 **Downloading a mix:**

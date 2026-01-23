@@ -2,12 +2,15 @@ package main
 
 import (
 	"bufio"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // downloadTidal downloads media from Tidal using tidal-dl
@@ -80,11 +83,33 @@ type VideoMetadata struct {
 }
 
 // TracklistEntry represents a single track in a DJ mix
+// RawLine is included to verify extraction accuracy (no hallucinations)
 type TracklistEntry struct {
-	Timestamp string
-	Artist    string
-	Track     string
-	RawLine   string
+	Timestamp string `json:"timestamp"`
+	Artist    string `json:"artist"`
+	Track     string `json:"track"`
+	RawLine   string `json:"raw_line"` // Original line from description for verification
+}
+
+// VideoTracklist holds a video and its extracted tracklist
+type VideoTracklist struct {
+	VideoID     string           `json:"video_id"`
+	Title       string           `json:"title"`
+	URL         string           `json:"url"`
+	Duration    string           `json:"duration"`
+	Uploader    string           `json:"uploader"`
+	Tracklist   []TracklistEntry `json:"tracklist"`
+	TrackCount  int              `json:"track_count"`
+	HasTracklist bool            `json:"has_tracklist"`
+}
+
+// DJSearchResult holds all results for a DJ search
+type DJSearchResult struct {
+	DJName       string           `json:"dj_name"`
+	SearchDate   string           `json:"search_date"`
+	TotalVideos  int              `json:"total_videos"`
+	VideosWithTracklists int      `json:"videos_with_tracklists"`
+	Videos       []VideoTracklist `json:"videos"`
 }
 
 // searchDJMixes searches YouTube for DJ mixes and returns video metadata
@@ -138,27 +163,37 @@ func getVideoMetadata(videoID string) (*VideoMetadata, error) {
 }
 
 // parseTracklist extracts tracklist from video description
+// CONSERVATIVE PARSING: Only extracts data that clearly exists in the description
+// No hallucinations - if format is ambiguous, we preserve the raw info
 func parseTracklist(description string) []TracklistEntry {
 	var tracklist []TracklistEntry
 
-	// Common timestamp patterns:
-	// 00:00 Artist - Track
-	// [00:00] Artist - Track
-	// 1. Artist - Track
-	// 00:00:00 Artist - Track
+	// Conservative timestamp patterns - require clear timestamps to avoid false positives
+	// Pattern priority: most specific to least specific
 	timestampPatterns := []*regexp.Regexp{
+		// 00:00 - Artist - Track (with dash separator)
 		regexp.MustCompile(`(?m)^(\d{1,2}:\d{2}(?::\d{2})?)\s+[-–—]\s*(.+)$`),
+		// [00:00] Artist - Track (bracketed timestamp)
 		regexp.MustCompile(`(?m)^\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*(.+)$`),
+		// 1. 00:00 - Artist - Track (numbered with timestamp)
+		regexp.MustCompile(`(?m)^\d+\.\s*(\d{1,2}:\d{2}(?::\d{2})?)\s+[-–—]?\s*(.+)$`),
+		// 00:00 Artist - Track (timestamp with space, no dash)
 		regexp.MustCompile(`(?m)^(\d{1,2}:\d{2}(?::\d{2})?)\s+(.+)$`),
-		regexp.MustCompile(`(?m)^\d+\.\s*(\d{1,2}:\d{2}(?::\d{2})?)\s+[-–—]\s*(.+)$`),
-		regexp.MustCompile(`(?m)^\d+\.\s+(.+?)\s+[-–—]\s+(.+)$`), // Numbered list without timestamp
 	}
 
 	lines := strings.Split(description, "\n")
+	seenLines := make(map[string]bool) // Deduplicate
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if line == "" {
+
+		// Skip empty lines or very short lines (likely not tracks)
+		if line == "" || len(line) < 8 {
+			continue
+		}
+
+		// Skip if already processed (deduplicate)
+		if seenLines[line] {
 			continue
 		}
 
@@ -166,31 +201,178 @@ func parseTracklist(description string) []TracklistEntry {
 			matches := pattern.FindStringSubmatch(line)
 			if len(matches) >= 3 {
 				timestamp := matches[1]
-				trackInfo := matches[2]
+				trackInfo := strings.TrimSpace(matches[2])
 
-				// Try to split Artist - Track
-				parts := strings.SplitN(trackInfo, "-", 2)
+				// Skip if track info is too short (likely noise)
+				if len(trackInfo) < 3 {
+					continue
+				}
+
+				// Conservative artist/track splitting
+				// Only split on dash if it exists, otherwise store full info in track field
 				var artist, track string
-				if len(parts) == 2 {
-					artist = strings.TrimSpace(parts[0])
-					track = strings.TrimSpace(parts[1])
+
+				// Try to split on dash (various dash types: -, –, —)
+				dashIndex := -1
+				for i, r := range trackInfo {
+					if r == '-' || r == '–' || r == '—' {
+						dashIndex = i
+						break
+					}
+				}
+
+				if dashIndex > 0 && dashIndex < len(trackInfo)-1 {
+					// Found a dash separator - split into artist and track
+					artist = strings.TrimSpace(trackInfo[:dashIndex])
+					track = strings.TrimSpace(trackInfo[dashIndex+1:])
+
+					// Validate: both parts should have reasonable length
+					if len(artist) < 1 || len(track) < 1 {
+						// Invalid split - store full info as track
+						artist = ""
+						track = trackInfo
+					}
 				} else {
-					artist = "Unknown"
-					track = strings.TrimSpace(trackInfo)
+					// No clear dash separator - store full info as track
+					// DO NOT hallucinate an "Unknown" artist
+					artist = ""
+					track = trackInfo
 				}
 
 				tracklist = append(tracklist, TracklistEntry{
 					Timestamp: timestamp,
 					Artist:    artist,
 					Track:     track,
-					RawLine:   line,
+					RawLine:   line, // Always preserve original for verification
 				})
+
+				seenLines[line] = true
 				break
 			}
 		}
 	}
 
 	return tracklist
+}
+
+// exportToJSON exports search results to JSON file with full verification data
+func exportToJSON(result *DJSearchResult, outputDir string) error {
+	filename := filepath.Join(outputDir, fmt.Sprintf("%s_%s.json",
+		sanitizeFilename(result.DJName),
+		time.Now().Format("20060102_150405")))
+
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	if err := os.WriteFile(filename, data, 0644); err != nil {
+		return fmt.Errorf("failed to write JSON file: %w", err)
+	}
+
+	fmt.Printf("✅ JSON exported to: %s\n", filename)
+	return nil
+}
+
+// exportToCSV exports all tracklists to CSV file
+func exportToCSV(result *DJSearchResult, outputDir string) error {
+	filename := filepath.Join(outputDir, fmt.Sprintf("%s_%s.csv",
+		sanitizeFilename(result.DJName),
+		time.Now().Format("20060102_150405")))
+
+	file, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("failed to create CSV file: %w", err)
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	// Write header
+	header := []string{"Video Title", "Video URL", "Timestamp", "Artist", "Track", "Raw Line (Verification)"}
+	if err := writer.Write(header); err != nil {
+		return fmt.Errorf("failed to write CSV header: %w", err)
+	}
+
+	// Write data
+	for _, video := range result.Videos {
+		for _, track := range video.Tracklist {
+			row := []string{
+				video.Title,
+				video.URL,
+				track.Timestamp,
+				track.Artist,
+				track.Track,
+				track.RawLine,
+			}
+			if err := writer.Write(row); err != nil {
+				return fmt.Errorf("failed to write CSV row: %w", err)
+			}
+		}
+	}
+
+	fmt.Printf("✅ CSV exported to: %s\n", filename)
+	return nil
+}
+
+// exportToMarkdown exports results to human-readable markdown file
+func exportToMarkdown(result *DJSearchResult, outputDir string) error {
+	filename := filepath.Join(outputDir, fmt.Sprintf("%s_%s.md",
+		sanitizeFilename(result.DJName),
+		time.Now().Format("20060102_150405")))
+
+	file, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("failed to create markdown file: %w", err)
+	}
+	defer file.Close()
+
+	// Write header
+	fmt.Fprintf(file, "# DJ Tracklists: %s\n\n", result.DJName)
+	fmt.Fprintf(file, "**Search Date:** %s\n", result.SearchDate)
+	fmt.Fprintf(file, "**Total Videos:** %d\n", result.TotalVideos)
+	fmt.Fprintf(file, "**Videos with Tracklists:** %d\n\n", result.VideosWithTracklists)
+	fmt.Fprintf(file, "---\n\n")
+
+	// Write each video
+	for i, video := range result.Videos {
+		fmt.Fprintf(file, "## Video %d: %s\n\n", i+1, video.Title)
+		fmt.Fprintf(file, "- **URL:** %s\n", video.URL)
+		fmt.Fprintf(file, "- **Duration:** %s\n", video.Duration)
+		fmt.Fprintf(file, "- **Uploader:** %s\n", video.Uploader)
+		fmt.Fprintf(file, "- **Tracks:** %d\n\n", video.TrackCount)
+
+		if video.HasTracklist {
+			fmt.Fprintf(file, "### Tracklist\n\n")
+			for _, track := range video.Tracklist {
+				fmt.Fprintf(file, "- **%s** - %s - %s\n", track.Timestamp, track.Artist, track.Track)
+			}
+			fmt.Fprintf(file, "\n")
+
+			// Add verification section with raw lines
+			fmt.Fprintf(file, "<details>\n<summary>Raw Lines (for verification)</summary>\n\n")
+			fmt.Fprintf(file, "```\n")
+			for _, track := range video.Tracklist {
+				fmt.Fprintf(file, "%s\n", track.RawLine)
+			}
+			fmt.Fprintf(file, "```\n</details>\n\n")
+		} else {
+			fmt.Fprintf(file, "*No tracklist found in description*\n\n")
+		}
+
+		fmt.Fprintf(file, "---\n\n")
+	}
+
+	fmt.Printf("✅ Markdown exported to: %s\n", filename)
+	return nil
+}
+
+// sanitizeFilename removes invalid characters from filename
+func sanitizeFilename(name string) string {
+	// Replace spaces and invalid characters with underscores
+	reg := regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
+	return reg.ReplaceAllString(strings.ReplaceAll(name, " ", "_"), "_")
 }
 
 // findDJTracklists searches for a DJ and displays tracklists from their mixes
@@ -209,6 +391,15 @@ func findDJTracklists(djName string) error {
 	}
 
 	fmt.Printf("Found %d videos. Extracting tracklists...\n\n", len(videos))
+
+	// Initialize result structure
+	result := &DJSearchResult{
+		DJName:       djName,
+		SearchDate:   time.Now().Format("2006-01-02 15:04:05"),
+		TotalVideos:  len(videos),
+		VideosWithTracklists: 0,
+		Videos:       make([]VideoTracklist, 0),
+	}
 
 	// Process each video
 	for i, video := range videos {
@@ -241,9 +432,24 @@ func findDJTracklists(djName string) error {
 		// Parse tracklist
 		tracklist := parseTracklist(fullVideo.Description)
 
+		// Build video tracklist entry
+		videoTracklist := VideoTracklist{
+			VideoID:     video.ID,
+			Title:       video.Title,
+			URL:         fmt.Sprintf("https://youtube.com/watch?v=%s", video.ID),
+			Duration:    durationStr,
+			Uploader:    fullVideo.Uploader,
+			Tracklist:   tracklist,
+			TrackCount:  len(tracklist),
+			HasTracklist: len(tracklist) > 0,
+		}
+
+		result.Videos = append(result.Videos, videoTracklist)
+
 		if len(tracklist) == 0 {
 			fmt.Printf("❌ No tracklist found in description\n\n")
 		} else {
+			result.VideosWithTracklists++
 			fmt.Printf("✅ Tracklist (%d tracks):\n", len(tracklist))
 			for _, track := range tracklist {
 				fmt.Printf("  %s - %s - %s\n", track.Timestamp, track.Artist, track.Track)
@@ -253,7 +459,38 @@ func findDJTracklists(djName string) error {
 	}
 
 	fmt.Printf("─────────────────────────────────────────────────────────────\n")
-	fmt.Printf("\n✨ Search complete! Found tracklists in %d videos.\n\n", len(videos))
+	fmt.Printf("\n✨ Search complete! Found tracklists in %d/%d videos.\n\n",
+		result.VideosWithTracklists, result.TotalVideos)
+
+	// Export results
+	if result.VideosWithTracklists > 0 {
+		exportDir := "./tracklists"
+		if err := os.MkdirAll(exportDir, 0755); err != nil {
+			return fmt.Errorf("failed to create export directory: %w", err)
+		}
+
+		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+		fmt.Println("Exporting tracklists...")
+		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+		// Export to all formats
+		if err := exportToJSON(result, exportDir); err != nil {
+			fmt.Printf("⚠️  JSON export failed: %v\n", err)
+		}
+
+		if err := exportToCSV(result, exportDir); err != nil {
+			fmt.Printf("⚠️  CSV export failed: %v\n", err)
+		}
+
+		if err := exportToMarkdown(result, exportDir); err != nil {
+			fmt.Printf("⚠️  Markdown export failed: %v\n", err)
+		}
+
+		fmt.Println("\n💾 All exports saved to:", exportDir)
+		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	} else {
+		fmt.Println("ℹ️  No tracklists found to export.\n")
+	}
 
 	return nil
 }
