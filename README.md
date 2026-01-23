@@ -1,18 +1,28 @@
 # Downloader
 
-A Go-based media downloader for Tidal, SoundCloud, and YouTube.
+A Go-based media downloader for Tidal, SoundCloud, and YouTube, optimized for DJ sets and mixes.
 
 ## Description
 
 This application allows you to download media from:
 - **Tidal** (requires username and password)
 - **SoundCloud**
-- **YouTube**
+- **YouTube** (optimized for DJ sets with enhanced features)
 
 The application detects the URL type and uses the appropriate downloader tool:
 - `tidal-dl` for Tidal
 - `scdl` for SoundCloud
-- `ytmdl` for YouTube
+- `yt-dlp` for YouTube (DJ set scraper)
+
+## YouTube DJ Set Scraper Features
+
+The YouTube downloader is specifically optimized for DJ sets and mixes with the following features:
+- **Best audio quality**: Downloads highest quality audio available
+- **MP3 format**: Automatic conversion to MP3 with VBR encoding
+- **Metadata extraction**: Includes title, uploader, and other metadata
+- **Embedded thumbnails**: Video thumbnail embedded as album art
+- **Playlist support**: Automatically downloads entire playlists
+- **Organized output**: Files saved to `./downloads` directory with descriptive names
 
 ## Building
 

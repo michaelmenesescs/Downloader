@@ -38,8 +38,8 @@ RUN pip install -r Tidal-Media-Downloader/TIDALDL-PY/requirements.txt && \
 # Install SCDL
 RUN pip3 install scdl
 
-# Install ytmdl
-RUN pip install ytmdl --upgrade
+# Install yt-dlp for YouTube DJ set scraping with enhanced features
+RUN pip install yt-dlp --upgrade
 
 # Copy the Go binary from the builder stage
 COPY --from=builder /app/downloader /app/downloader

@@ -25,11 +25,46 @@ func downloadSoundcloud(url string) error {
 	return cmd.Run()
 }
 
-// downloadYoutube downloads media from YouTube using ytmdl
-func downloadYoutube(url string) error {
-	cmd := exec.Command("ytmdl", url)
+// downloadYoutubeDJSet downloads DJ sets from YouTube using yt-dlp with enhanced features
+// Features: best audio quality, metadata extraction, playlist support, embedded thumbnails
+func downloadYoutubeDJSet(url string) error {
+	// Create downloads directory if it doesn't exist
+	downloadsDir := "./downloads"
+	if err := os.MkdirAll(downloadsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create downloads directory: %w", err)
+	}
+
+	// yt-dlp command with optimized settings for DJ sets:
+	// -f bestaudio: Download best audio quality
+	// --extract-audio: Extract audio from video
+	// --audio-format mp3: Convert to MP3 format
+	// --audio-quality 0: Best audio quality (VBR)
+	// --embed-thumbnail: Embed video thumbnail as album art
+	// --add-metadata: Add metadata to the file
+	// --metadata-from-title: Extract additional metadata from title
+	// -o: Output template with metadata in filename
+	// --yes-playlist: Download playlists if URL is a playlist
+	args := []string{
+		"-f", "bestaudio",
+		"--extract-audio",
+		"--audio-format", "mp3",
+		"--audio-quality", "0",
+		"--embed-thumbnail",
+		"--add-metadata",
+		"--metadata-from-title", "%(artist)s - %(title)s",
+		"-o", downloadsDir + "/%(uploader)s - %(title)s.%(ext)s",
+		"--yes-playlist",
+		"--no-mtime",
+		url,
+	}
+
+	cmd := exec.Command("yt-dlp", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+
+	fmt.Println("\nDownloading with yt-dlp (best audio quality, with metadata)...")
+	fmt.Printf("Output directory: %s\n\n", downloadsDir)
+
 	return cmd.Run()
 }
 
@@ -44,7 +79,7 @@ func main() {
 	youtubeRegex2 := regexp.MustCompile(`^https?://(www\.)?youtu\.be/`)
 
 	for {
-		fmt.Println("Download media from Tidal, Soundcloud, or YouTube.")
+		fmt.Println("Download media from Tidal, Soundcloud, or YouTube (optimized for DJ sets).")
 
 		// Get URL from user
 		fmt.Print("URL: ")
@@ -87,8 +122,8 @@ func main() {
 				os.Exit(1)
 			}
 		} else if youtubeRegex1.MatchString(url) || youtubeRegex2.MatchString(url) {
-			fmt.Println("YouTube")
-			if err := downloadYoutube(url); err != nil {
+			fmt.Println("YouTube DJ Set Scraper")
+			if err := downloadYoutubeDJSet(url); err != nil {
 				fmt.Fprintf(os.Stderr, "Error downloading from YouTube: %v\n", err)
 				os.Exit(1)
 			}
